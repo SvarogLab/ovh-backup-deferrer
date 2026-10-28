@@ -2,56 +2,30 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
     tags: ["v*"]
   pull_request:
+  schedule:
+    - cron: "0 6 * * *"
 
 permissions:
   contents: read
 
 jobs:
-  check:
+  rust:
+    uses: SvarogLab/.github/.github/workflows/rust.yml@v1
+
+  helm:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: fmt
-        run: cargo fmt --all -- --check
-
-      - name: clippy
-        run: cargo clippy --all-targets -- -D warnings
-
-      - name: test
-        run: cargo test
-
       - uses: azure/setup-helm@v5
 
       - name: helm lint
         run: helm lint helm --strict --set credentialsSecret=ci --set services[0].name=vps-a.example --set services[0].offset=0
 
-  # Separate job so an advisory hit is unambiguous in the checks list, rather than buried in
-  # the same log as an unrelated clippy or test failure.
-  security:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-
-      - name: cargo audit
-        run: |
-          cargo install cargo-audit --locked
-          cargo audit
-
   image:
-    needs: [check, security]
+    needs: [rust, helm]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -67,10 +41,13 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # GHCR paths are lowercase; the organisation's name is not.
+      - name: Resolve the image name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
       - id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ env.IMAGE }}
           flavor: latest=false
           tags: type=semver,pattern={{version}}
       - uses: docker/build-push-action@v7
@@ -84,7 +61,7 @@ jobs:
           cache-to: type=gha,mode=max
 
   chart:
-    needs: [check, security]
+    needs: [rust, helm]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -102,5 +79,6 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           helm package helm --version "$version" --app-version "$version"
-          echo "$TOKEN" | helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin
-          helm push "ovh-autobackup-deferrer-$version.tgz" "oci://ghcr.io/${{ github.repository }}"
+          echo "$TOKEN" | helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          # GHCR paths are lowercase; the organisation's name is not.
+          helm push "ovh-autobackup-deferrer-$version.tgz" "oci://ghcr.io/${GITHUB_REPOSITORY,,}"
