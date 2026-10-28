@@ -41,10 +41,13 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # GHCR paths are lowercase; the organisation's name is not.
+      - name: Resolve the image name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
       - id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ env.IMAGE }}
           flavor: latest=false
           tags: type=semver,pattern={{version}}
       - uses: docker/build-push-action@v7
@@ -76,5 +79,6 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           helm package helm --version "$version" --app-version "$version"
-          echo "$TOKEN" | helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin
-          helm push "ovh-autobackup-deferrer-$version.tgz" "oci://ghcr.io/${{ github.repository }}"
+          echo "$TOKEN" | helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          # GHCR paths are lowercase; the organisation's name is not.
+          helm push "ovh-autobackup-deferrer-$version.tgz" "oci://ghcr.io/${GITHUB_REPOSITORY,,}"

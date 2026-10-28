@@ -3,7 +3,7 @@ name = "ovh-autobackup-deferrer"
 version = "0.1.1"
 edition = "2024"
 description = "Keeps the OVHcloud VPS automated backup schedule in the recent past so it never fires"
-repository = "https://github.com/ffaxl/tools-ovh-backup-deferrer"
+repository = "https://github.com/SvarogLab/ovh-backup-deferrer"
 
 [dependencies]
 anyhow = "1.0.104"
