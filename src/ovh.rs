@@ -2,9 +2,10 @@
 
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use jiff::Timestamp;
 use jiff::civil::Time;
+use reqwest::StatusCode;
 use reqwest::header::CONTENT_TYPE;
 use sha1::{Digest, Sha1};
 
@@ -48,6 +49,35 @@ pub fn signature(
     format!("$1${}", hex::encode(Sha1::digest(signed)))
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum RescheduleError {
+    #[error("POST {url} failed")]
+    Transport {
+        url: String,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("POST {url} returned {status}: {body}")]
+    Status {
+        url: String,
+        status: StatusCode,
+        body: String,
+    },
+}
+
+impl RescheduleError {
+    /// Whether the same request may succeed when repeated: the API was unreachable, overloaded
+    /// or failed internally. A rejected key or an unknown service fails the same way every time.
+    pub fn is_transient(&self) -> bool {
+        match self {
+            Self::Transport { source, .. } => !source.is_builder(),
+            Self::Status { status, .. } => {
+                status.is_server_error() || *status == StatusCode::TOO_MANY_REQUESTS
+            }
+        }
+    }
+}
+
 pub struct Client {
     http: reqwest::Client,
     base_url: String,
@@ -68,7 +98,7 @@ impl Client {
     }
 
     /// Queues the change; the provider applies it asynchronously, minutes later.
-    pub async fn reschedule(&self, service: &str, schedule: Time) -> Result<()> {
+    pub async fn reschedule(&self, service: &str, schedule: Time) -> Result<(), RescheduleError> {
         let url = format!("{}/vps/{service}/automatedBackup/reschedule", self.base_url);
         let body = serde_json::json!({ "schedule": schedule }).to_string();
         let timestamp = Timestamp::now().as_second();
@@ -91,8 +121,11 @@ impl Client {
             .header(CONTENT_TYPE, "application/json")
             .body(body)
             .send()
-            .await
-            .with_context(|| format!("POST {url} failed"))?;
+            .await;
+        let response = match response {
+            Ok(response) => response,
+            Err(source) => return Err(RescheduleError::Transport { url, source }),
+        };
         let status = response.status();
         if status.is_success() {
             return Ok(());
@@ -103,7 +136,7 @@ impl Client {
             .text()
             .await
             .unwrap_or_else(|error| format!("(body unreadable: {error})"));
-        bail!("POST {url} returned {status}: {body}")
+        Err(RescheduleError::Status { url, status, body })
     }
 }
 
@@ -120,12 +153,16 @@ pub(crate) mod tests {
     const CONSUMER_KEY: &str = "consumer-key";
 
     pub(crate) fn client_of(server: &MockServer) -> Client {
+        client_at(&server.uri())
+    }
+
+    fn client_at(origin: &str) -> Client {
         let credentials = Credentials {
             application_key: APPLICATION_KEY.into(),
             application_secret: APPLICATION_SECRET.into(),
             consumer_key: CONSUMER_KEY.into(),
         };
-        Client::new(format!("{}/1.0", server.uri()), credentials).unwrap()
+        Client::new(format!("{origin}/1.0"), credentials).unwrap()
     }
 
     #[test]
@@ -162,6 +199,46 @@ pub(crate) mod tests {
             .reschedule("vps-aaaa.vps.ovh.net", time(13, 40, 0, 0))
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_server_error_is_transient_and_a_client_error_is_not() {
+        for (status, transient) in [
+            (500, true),
+            (503, true),
+            (429, true),
+            (403, false),
+            (404, false),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(status))
+                .mount(&server)
+                .await;
+
+            let error = client_of(&server)
+                .reschedule("vps-aaaa.vps.ovh.net", time(13, 40, 0, 0))
+                .await
+                .unwrap_err();
+
+            assert_eq!(error.is_transient(), transient, "{status}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_api_is_transient() {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let client = client_at(&format!("http://{closed}"));
+
+        let error = client
+            .reschedule("vps-aaaa.vps.ovh.net", time(13, 40, 0, 0))
+            .await
+            .unwrap_err();
+
+        assert!(error.is_transient(), "{error}");
     }
 
     /// Whether `request` carries a valid signature over a timestamp from the local clock.
