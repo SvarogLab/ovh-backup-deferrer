@@ -19,9 +19,13 @@ backup of whatever they hold in place before deploying.
 ## Behaviour in short
 
 - Per VPS and cycle: one `POST /vps/{service}/automatedBackup/reschedule`, nothing read first.
-- A failing VPS is logged and the cycle still writes the others, then the daemon exits non-zero:
-  a revoked key or a mistyped service shows up as a restarting pod rather than a log line. After a
-  write the schedule sits at least 22 hours from firing, which leaves ample time to notice.
+- A transient failure — the API unreachable, a 5xx or a 429 — is retried twice within the cycle,
+  10 seconds and then a minute later. If the last attempt fails too, the VPS is logged as `missed`
+  and waits for the next cycle.
+- A permanent failure (any other 4xx), or a VPS missed six cycles in a row, is logged as `failed`;
+  the cycle still writes the others, then the daemon exits non-zero: a revoked key, a mistyped
+  service or a long outage shows up as a restarting pod rather than a log line. After a write the
+  schedule sits at least 22 hours from firing, which leaves ample time to notice.
 - Offsets must differ between VPS: a backup pauses its guest, and two etcd members paused together
   lose quorum. Startup refuses a shared offset; keep them well apart, e.g. 0, 20 and 40.
 - Output is JSON logs on stdout, one line per VPS per cycle. There is no listener and no probe.
