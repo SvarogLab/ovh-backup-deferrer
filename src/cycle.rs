@@ -108,7 +108,7 @@ async fn reschedule(
 
 /// The schedule to write at `now`: the start of the previous UTC hour, plus the offset.
 fn target(now: Timestamp, offset: u8) -> Time {
-    let hour = now.to_zoned(TimeZone::UTC).time().hour();
+    let hour = now.to_zoned_datetime(TimeZone::UTC).time().hour();
     Time::midnight()
         .wrapping_add(SignedDuration::from_hours(i64::from(hour)))
         .wrapping_add(SignedDuration::from_mins(i64::from(offset) - 60))
