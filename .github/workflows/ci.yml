@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   rust:
-    uses: SvarogLab/.github/.github/workflows/rust.yml@v2.1
+    uses: SvarogLab/.github/.github/workflows/rust.yml@v3
 
   helm:
     runs-on: ubuntu-latest
