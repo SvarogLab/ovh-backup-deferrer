@@ -75,12 +75,16 @@ Without `DEFERRER_DRY_RUN=true` this writes the schedules.
 
 ## Deploying
 
-A `v<version>` tag publishes, both as `<version>`:
+Run **Release PR** from the Actions tab. It opens `chore: release vX.Y.Z`, with the version that
+`git-cliff` computes from the commits since the last tag (or the one given) moved into `Cargo.toml`,
+`Cargo.lock` and `helm/Chart.yaml`, and `CHANGELOG.md` regenerated. Merging it tags the merge commit
+and publishes, in that run:
 
-- the image `ghcr.io/svaroglab/ovh-backup-deferrer`;
-- the Helm chart `oci://ghcr.io/svaroglab/ovh-backup-deferrer/ovh-autobackup-deferrer`, which
-  runs that image as a single-replica Deployment. [helm/values.yaml](helm/values.yaml) documents
-  its settings.
+- the image `ghcr.io/svaroglab/ovh-backup-deferrer:vX.Y.Z`, for amd64 and arm64;
+- the Helm chart `oci://ghcr.io/svaroglab/ovh-backup-deferrer/ovh-autobackup-deferrer` at `X.Y.Z`,
+  which runs that image as a single-replica Deployment. [helm/values.yaml](helm/values.yaml)
+  documents its settings;
+- a GitHub Release carrying the same chart.
 
 1. Note the current backup time of every VPS from the control panel, somewhere private; rollback
    writes these back.

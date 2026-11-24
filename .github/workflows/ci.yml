@@ -3,7 +3,6 @@ name: CI
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
   schedule:
     - cron: "0 6 * * *"
@@ -13,10 +12,12 @@ permissions:
 
 jobs:
   rust:
-    uses: SvarogLab/.github/.github/workflows/rust.yml@v3
+    uses: SvarogLab/.github/.github/workflows/rust.yml@feat/image-and-chart-workflows
+    with:
+      binaries: ovh-autobackup-deferrer
 
   helm:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - uses: azure/setup-helm@v5
@@ -24,61 +25,47 @@ jobs:
       - name: helm lint
         run: helm lint helm --strict --set credentialsSecret=ci --set services[0].name=vps-a.example --set services[0].offset=0
 
-  image:
-    needs: [rust, helm]
-    runs-on: ubuntu-latest
+  image-check:
+    if: github.event_name == 'pull_request'
+    uses: SvarogLab/.github/.github/workflows/image.yml@feat/image-and-chart-workflows
     permissions:
       contents: read
       packages: write
-    env:
-      RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
-        if: env.RELEASE == 'true'
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      # GHCR paths are lowercase; the organisation's name is not.
-      - name: Resolve the image name
-        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
-      - id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ env.IMAGE }}
-          flavor: latest=false
-          tags: type=semver,pattern={{version}}
-      - uses: docker/build-push-action@v7
-        with:
-          context: .
-          platforms: linux/amd64
-          push: ${{ env.RELEASE == 'true' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+    with:
+      push: false
+      binaries: ovh-autobackup-deferrer
+
+  tag:
+    needs: [rust, helm]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: SvarogLab/.github/.github/workflows/tag-release.yml@feat/image-and-chart-workflows
+    permissions:
+      contents: write
+
+  image:
+    needs: tag
+    if: needs.tag.outputs.tag != ''
+    uses: SvarogLab/.github/.github/workflows/image.yml@feat/image-and-chart-workflows
+    permissions:
+      contents: read
+      packages: write
+    with:
+      tag: ${{ needs.tag.outputs.tag }}
 
   chart:
-    needs: [rust, helm]
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    needs: [tag, image]
+    uses: SvarogLab/.github/.github/workflows/chart.yml@feat/image-and-chart-workflows
     permissions:
       contents: read
       packages: write
-    steps:
-      - uses: actions/checkout@v7
-      - uses: azure/setup-helm@v5
+    with:
+      tag: ${{ needs.tag.outputs.tag }}
 
-      # The tag is the one version source for both artifacts, so the chart and its default image
-      # tag cannot drift from the image this run publishes.
-      - name: package and push
-        env:
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          helm package helm --version "$version" --app-version "$version"
-          echo "$TOKEN" | helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          # GHCR paths are lowercase; the organisation's name is not.
-          helm push "ovh-autobackup-deferrer-$version.tgz" "oci://ghcr.io/${GITHUB_REPOSITORY,,}"
+  release:
+    needs: [tag, chart]
+    uses: SvarogLab/.github/.github/workflows/release.yml@feat/image-and-chart-workflows
+    permissions:
+      contents: write
+    with:
+      tag: ${{ needs.tag.outputs.tag }}
+      download-chart: true
